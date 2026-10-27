@@ -118,7 +118,7 @@ class Client:
     def create_export(self, start, end, count=None, template=None):
         """Queue a one-time export of this search for [start, end] (datetimes, UTC); returns the export id.
         `count` asks Meltwater for a random sample of at most that many docs (approximate, about +/-10%)."""
-        body = {"search_ids": [str(self.search_id)], "start_date": iso(start, z=True), "end_date": iso(end, z=True)}
+        body = {"search_ids": [int(self.search_id)], "start_date": iso(start, z=True), "end_date": iso(end, z=True)}
         if count:
             body["sample"] = {"count": int(count)}
         tpl = template or self.template
