@@ -8,11 +8,11 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import __version__, config, profiles, update
+from . import __version__, config, fieldprofiles, profiles, update
 from .limits import LIMIT_KEYS, LimitReached, UsageGuard, fmt_when, parse_headers
 from .client import Client, MwError
-from .output import COLUMNS, flatten, parse_fields, report
-from .export import run_export
+from .output import COLUMNS, PRESETS, PRESET_HELP, flatten, parse_fields, report
+from .export import convert_run, run_export
 from .runner import finish, run
 from .sampling import MODES
 
@@ -145,8 +145,11 @@ def add_pull_args(p):
     g.add_argument("--seed", type=int, help="random seed; recorded in the manifest (default: random)")
     g = p.add_argument_group("output")
     g.add_argument("--format", choices=("csv", "jsonl"), help="output format (default: your saved setting, else csv)")
-    g.add_argument("--fields", help="comma-separated columns; add extras as name=dotted.path "
-                                    f"(built-in: {','.join(COLUMNS)})")
+    g.add_argument("--fields", help="columns: 'all' (default: every Meltwater field), 'basic', or a comma-separated "
+                                    "list; add extras as name=dotted.path. Built-in columns: "
+                                    f"{','.join(COLUMNS)},sentiment. Overrides --fields-profile")
+    g.add_argument("--fields-profile", help="named column set (see `mwpull fields`); default: your default field "
+                                            "profile, else 'all'")
     g.add_argument("--raw", action="store_true", help="jsonl only: include the full raw API document as 'raw'")
     g.add_argument("--out-dir", help="parent folder for run folders (default: $MWPULL_OUT_DIR, else your saved "
                                       "setting, else ./out; see `mwpull config`)")
@@ -198,7 +201,8 @@ def build_args(a):
         raise MwError("--mode all pulls everything; --max-docs / --per-day / --fraction don't apply")
     if a.mode == "per-day" and a.fraction is not None:
         raise MwError("--fraction applies to proportional/random; per-day takes --per-day N or --max-docs N")
-    parse_fields(a.fields)  # fail early on a bad spec
+    fields = fieldprofiles.resolve(a.fields, a.fields_profile)
+    parse_fields(fields)  # fail early on a bad spec
     if a.languages:
         langs = [] if a.languages.strip().lower() == "any" else [x.strip() for x in a.languages.split(",") if x.strip()]
     else:
@@ -211,7 +215,7 @@ def build_args(a):
         "yes": a.yes, "confirm_over": a.confirm_over,
         "seed": a.seed if a.seed is not None else random.SystemRandom().randrange(2 ** 31),
         "languages": langs, "template": resolve_template(a.template, prof),
-        "format": fmt, "fields": a.fields, "raw": a.raw,
+        "format": fmt, "fields": fields, "raw": a.raw,
         "out_dir": out_dir, "name": a.name or f"{search_id[:8]}_{start}_{end}_{a.mode}",
         "no_report": a.no_report, "dry_run": a.dry_run, "resume": a.resume, "force": a.force,
     }
@@ -301,14 +305,15 @@ def cmd_export(a):
     fmt = a.format or config.format_default()
     if a.raw and fmt != "jsonl":
         raise MwError("--raw only works with --format jsonl")
-    parse_fields(a.fields)
+    fields = fieldprofiles.resolve(a.fields, a.fields_profile)
+    parse_fields(fields)
     if a.languages not in (None, "any") and not a.dry_run:
         print("note: exports have no language filter; --languages is ignored (use --via search to filter)",
               file=sys.stderr)
     args = {"version": __version__, "profile": prof["name"], "search_id": search_id, "company_id": prof["company_id"],
             "start": start.isoformat(), "end": end.isoformat(), "start_date": start, "end_date": end,
             "split": a.split, "max_docs": a.max_docs, "per_slice": a.per_slice,
-            "template": resolve_template(a.template, prof), "format": fmt, "fields": a.fields, "raw": a.raw,
+            "template": resolve_template(a.template, prof), "format": fmt, "fields": fields, "raw": a.raw,
             "out_dir": a.out_dir or config.out_dir_default(), "name": a.name or f"{search_id[:8]}_{start}_{end}_export",
             "no_report": a.no_report, "dry_run": a.dry_run, "resume": a.resume, "force": a.force,
             "pandas": a.pandas, "allow_long_window": a.allow_long_window, "poll_interval": a.poll_interval,
@@ -326,6 +331,8 @@ def cmd_resume(a):
     old = json.load(open(mf))["args"]
     prof = profiles.resolve(a.profile or old.get("profile"))
     args = dict(old)
+    if not old.get("fields"):
+        args["fields"] = "basic"  # runs made before 3.2 wrote the basic columns by default
     args.update(start_date=date.fromisoformat(old["start"]), end_date=date.fromisoformat(old["end"]),
                 out_dir=os.path.dirname(os.path.abspath(a.run_dir)), name=os.path.basename(os.path.abspath(a.run_dir)),
                 dry_run=False, resume=True, force=False)
@@ -601,6 +608,45 @@ def cmd_profile(a):
         print(f"Default profile is now '{a.name}'")
 
 
+def cmd_fields(a):
+    data = fieldprofiles.load()
+    if a.action == "path":
+        print(fieldprofiles.path())
+    elif a.action == "list":
+        default = data["default"] or "all"
+        for n in PRESETS:
+            print(f"{'*' if n == default else ' '} {n:12s} (built-in) {PRESET_HELP[n]}")
+        for n, spec in data["profiles"].items():
+            print(f"{'*' if n == default else ' '} {n:12s} {spec}")
+    elif a.action == "show":
+        if not a.name:
+            raise MwError("Usage: mwpull fields show NAME")
+        cols = [n for n, _ in parse_fields(fieldprofiles.lookup(a.name, data))]
+        print(f"{a.name}: {len(cols)} columns\n" + "\n".join(cols))
+    elif a.action == "add":
+        if not a.name or not a.fields:
+            raise MwError("Usage: mwpull fields add NAME --fields 'basic,sentiment,reach=source.metrics.reach' "
+                          "[--set-default]")
+        fieldprofiles.add(a.name, a.fields, a.set_default)
+        print(f"Saved field profile '{a.name}' to {fieldprofiles.path()}"
+              + (" (now the default)" if a.set_default else ""))
+    elif a.action == "remove":
+        fieldprofiles.remove(a.name or "")
+        print(f"Removed field profile '{a.name}'")
+    elif a.action == "default":
+        if not a.name:
+            raise MwError("Usage: mwpull fields default NAME   (use 'all' to go back to the built-in default)")
+        fieldprofiles.set_default(a.name)
+        print(f"Default field profile is now '{a.name}'")
+
+
+def cmd_convert(a):
+    """Rebuild a CSV/JSONL from the raw export files in a run folder (made with --keep-raw): no new export."""
+    fields = fieldprofiles.resolve(a.fields, a.fields_profile)
+    path = convert_run(a.run_dir, fields, a.format or config.format_default(), a.pandas, a.output)
+    print(f"\nDone. Data: {path}")
+
+
 def parser():
     ap = argparse.ArgumentParser(prog="mwpull", description=DESCRIPTION)
     ap.add_argument("--version", action="version", version=f"mwpull {__version__}")
@@ -630,7 +676,8 @@ def parser():
     p.add_argument("--everything", action="store_true", help="no sample: every doc (up to 2,000,000 per export)")
     p.add_argument("--template", help=f"output template (default: profile's, else {DEFAULT_TEMPLATE}; must be JSON)")
     p.add_argument("--format", choices=("csv", "jsonl"))
-    p.add_argument("--fields", help=f"comma-separated columns; extras as name=dotted.path (built-in: {','.join(COLUMNS)})")
+    p.add_argument("--fields", help="'all' (default), 'basic', or comma-separated columns; extras as name=dotted.path")
+    p.add_argument("--fields-profile", help="named column set (see `mwpull fields`)")
     p.add_argument("--raw", action="store_true", help="jsonl only: include the full raw document")
     add_pandas(p)
     p.add_argument("--out-dir")
@@ -695,6 +742,23 @@ def parser():
     p.add_argument("file")
     p.add_argument("--format", choices=("csv", "jsonl"))
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("fields", help="named column sets (~/.meltwater/fields.json), like account profiles")
+    p.add_argument("action", choices=("list", "show", "add", "remove", "default", "path"))
+    p.add_argument("name", nargs="?")
+    p.add_argument("--fields", help="add: the column spec, e.g. 'basic,sentiment,reach=source.metrics.reach'")
+    p.add_argument("--set-default", action="store_true", help="add: make this the default field profile")
+    p.set_defaults(fn=cmd_fields)
+
+    p = sub.add_parser("convert", help="rebuild the data file from a run folder's raw/ export files (no new export)")
+    p.add_argument("run_dir")
+    p.add_argument("--fields", help="'all' (default), 'basic', or a column list")
+    p.add_argument("--fields-profile")
+    p.add_argument("--format", choices=("csv", "jsonl"))
+    p.add_argument("--output", help="file name inside the run folder (default documents.<format>, a new name if "
+                                    "that already exists)")
+    add_pandas(p)
+    p.set_defaults(fn=cmd_convert)
 
     p = sub.add_parser("profile", help="manage account profiles (~/.meltwater/profiles.json)")
     p.add_argument("action", choices=("add", "list", "remove", "default", "limits", "path"))

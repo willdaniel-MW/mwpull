@@ -9,6 +9,7 @@ Run directory layout (<out_dir>/<name>/):
   export_state.json     per-slice export id, status and the data file's byte offset after each finished slice
   raw/                  downloaded export files (deleted after conversion unless --keep-raw)
 """
+import glob
 import json
 import os
 import sys
@@ -87,6 +88,35 @@ def week_start(doc):
         return (d - timedelta(days=d.weekday())).isoformat()
     except ValueError:
         return ""
+
+
+def convert_run(run_dir, spec, fmt, pandas=False, output=None, log=print):
+    """Rebuild a data file from raw/*.json in a run folder; de-duplicates by document id. Never overwrites."""
+    raws = sorted(glob.glob(os.path.join(run_dir, "raw", "*.json")))
+    if not raws:
+        raise MwError(f"No raw/*.json in {run_dir}. Runs only keep them with --keep-raw.")
+    fields = parse_fields(spec)
+    path = os.path.join(run_dir, output or f"documents.{fmt}")
+    n = 1
+    while os.path.exists(path):
+        path = os.path.join(run_dir, f"{(output or 'documents').rsplit('.', 1)[0]}_{n}.{fmt}")
+        n += 1
+    seen, rows = set(), 0
+    w = RowWriter(path, fmt, fields, bom=not pandas)
+    try:
+        for raw in raws:
+            for doc in extract_docs(raw):
+                did = doc.get("id") or doc.get("document_id")
+                if did in seen:
+                    continue
+                seen.add(did)
+                w.write(build_row(doc, week_start(doc), fields), doc)
+                rows += 1
+    finally:
+        w.close()
+    log(f"{rows} docs, {len(fields)} columns from {len(raws)} raw file(s)")
+    report(path, fmt)
+    return path
 
 
 def run_export(client, a, sleep=time.sleep, log=print):

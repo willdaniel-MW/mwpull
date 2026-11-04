@@ -8,6 +8,37 @@ COLUMNS = ["document_id", "title", "published_date", "language", "url", "domain"
            "source_type", "content_type", "snippet", "full_text", "week_start"]
 
 
+# Every field Meltwater's api.json template returns, as dotted paths (verified on a 12,213-document pull).
+# Lists (keyphrases, named_entities, matched.*, ...) are written as JSON text in one cell.
+API_PATHS = [
+    "author.external_id", "author.handle", "author.name", "author.profile_url",
+    "content.byline", "content.emojis", "content.hashtags", "content.image", "content.links", "content.mentions",
+    "custom.custom_categories", "custom.custom_fields", "custom.hidden", "custom.tags", "custom.visible",
+    "enrichments.keyphrases", "enrichments.named_entities",
+    "external_id", "indexed_date",
+    "location.city", "location.country_code", "location.geo.latitude", "location.geo.longitude",
+    "location.region", "location.state",
+    "matched.hit_sentence", "matched.inputs", "matched.keywords",
+    "metrics.earned_media_value", "metrics.editorial_echo",
+    "metrics.engagement.comments", "metrics.engagement.likes", "metrics.engagement.quotes",
+    "metrics.engagement.reactions", "metrics.engagement.replies", "metrics.engagement.reposts",
+    "metrics.engagement.shares", "metrics.engagement.total",
+    "metrics.episode_reach", "metrics.estimated_views",
+    "metrics.social_echo.bluesky", "metrics.social_echo.facebook", "metrics.social_echo.reddit",
+    "metrics.social_echo.total", "metrics.social_echo.x", "metrics.views",
+    "parent.url", "source.id", "source.information_type",
+    "source.metrics.ave", "source.metrics.local_reach", "source.metrics.national_reach",
+    "source.metrics.national_viewership", "source.metrics.reach", "source.metrics.reach_desktop",
+    "source.metrics.reach_mobile", "source.outlet_types", "source.url",
+    "thread.title", "thread.url",
+]
+# Paths already covered by a friendly column in COLUMNS (or the sentiment column), so "all" doesn't repeat them.
+OTHER = "other_fields"  # JSON of any field Meltwater adds that isn't in API_PATHS yet, so nothing is silently dropped
+_KNOWN = set(API_PATHS) | {"id", "document_id", "published_date", "date", "url", "content_type", "content.title",
+                           "content.body", "content.opening_text", "enrichments.language_code",
+                           "enrichments.sentiment", "source.domain", "source.name", "source.type"}
+
+
 def get(d, *path):
     for p in path:
         if not isinstance(d, dict):
@@ -40,23 +71,58 @@ def flatten(doc, week_start):
         "full_text": first(get(doc, "content", "body"), doc.get("body"),
                            doc.get("content") if isinstance(doc.get("content"), str) else None),
         "week_start": week_start,
+        "sentiment": first(get(doc, "enrichments", "sentiment"), doc.get("sentiment")),
     }
 
 
+def _leaves(o, prefix=()):
+    if isinstance(o, dict) and o:
+        for k, v in o.items():
+            yield from _leaves(v, prefix + (k,))
+    else:
+        yield ".".join(prefix), o
+
+
+def other_fields(doc):
+    """Fields in this document that mwpull doesn't have a column for (empty string if none)."""
+    extra = {k: v for k, v in _leaves(doc) if k and k not in _KNOWN and not k.startswith("location.geo")}
+    return json.dumps(extra, ensure_ascii=False) if extra else ""
+
+
+PRESETS = {
+    "all": COLUMNS[:-1] + ["sentiment", "week_start"] + [p for p in API_PATHS] + [OTHER],
+    "basic": list(COLUMNS),
+}
+PRESET_HELP = {"all": "every field Meltwater returns, plus sentiment and a week_start column (the default)",
+               "basic": "document_id, title, published_date, language, url, domain, source_name, source_type, "
+                        "content_type, snippet, full_text, week_start"}
+
+
 def parse_fields(spec):
-    """'a,b,sent=enrichments.sentiment' -> [(name, None | ['enrichments','sentiment'])]. None spec = defaults."""
-    if not spec:
-        return [(c, None) for c in COLUMNS]
-    out = []
-    for item in (x.strip() for x in spec.split(",") if x.strip()):
-        if "=" in item:
+    """'all' / 'basic' / 'a,b,sent=enrichments.sentiment' -> [(name, None | ['enrichments','sentiment'])].
+    Presets (all, basic) can be mixed with other items: 'basic,sentiment,reach=source.metrics.reach'.
+    Empty spec = all."""
+    items = [x.strip() for x in (spec or "all").split(",") if x.strip()] or ["all"]
+    out, seen = [], set()
+
+    def add(name, path):
+        if name not in seen:
+            seen.add(name)
+            out.append((name, path))
+
+    for item in items:
+        if item in PRESETS:
+            for c in PRESETS[item]:
+                add(c, None if (c in COLUMNS or c in ("sentiment", OTHER)) else c.split("."))
+        elif "=" in item:
             name, path = item.split("=", 1)
-            out.append((name.strip(), path.strip().split(".")))
-        elif item in COLUMNS:
-            out.append((item, None))
+            add(name.strip(), path.strip().split("."))
+        elif item in COLUMNS or item == "sentiment":
+            add(item, None)
         else:
-            raise ValueError(f"Unknown field '{item}'. Built-in: {', '.join(COLUMNS)}. "
-                             f"For raw API values use name=dotted.path (e.g. sentiment=enrichments.sentiment).")
+            raise ValueError(f"Unknown field '{item}'. Presets: {', '.join(PRESETS)}. Built-in columns: "
+                             f"{', '.join(COLUMNS)}, sentiment. For raw API values use name=dotted.path "
+                             f"(e.g. reach=source.metrics.reach).")
     return out
 
 
@@ -64,7 +130,10 @@ def build_row(doc, week_start, fields):
     base = flatten(doc, week_start)
     row = {}
     for name, path in fields:
-        row[name] = base[name] if path is None else get(doc, *path)
+        if name == OTHER and path is None:
+            row[name] = other_fields(doc)
+        else:
+            row[name] = base[name] if path is None else get(doc, *path)
     return row
 
 

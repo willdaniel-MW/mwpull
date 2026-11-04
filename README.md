@@ -60,6 +60,21 @@ Each run gets its own folder (`<out_dir>/<name>/`) with the data file, a manifes
 - Exports take about a minute to an hour each. Meltwater deletes finished export data after 30 days, but mwpull downloads it for you right away.
 - `--resume` never creates a second export for a slice that already has one.
 
+## Columns (fields)
+
+By default every pull writes **all** the fields Meltwater returns (about 74 columns: full text, sentiment, author, location, reach and engagement metrics, entities, keyphrases and more). Lists such as `enrichments.named_entities` are written as JSON text in one cell, and `other_fields` catches anything Meltwater adds later.
+
+```bash
+mwpull pull ... --fields basic                          # the 12 simple columns (document_id, title, ..., full_text, week_start)
+mwpull pull ... --fields 'basic,sentiment,reach=source.metrics.reach'   # pick your own; extras as name=dotted.path
+mwpull fields add slim --fields 'basic,sentiment' --set-default          # save a named column set (like account profiles)
+mwpull fields list                                      # also: show NAME | remove NAME | default NAME | path
+mwpull pull ... --fields-profile slim                   # use one for a single run
+mwpull convert "<run folder>" --fields-profile slim     # rebuild the file from the run's raw/ files (needs --keep-raw); no new export
+```
+
+Order of precedence: `--fields` > `--fields-profile` > your default field profile > `all`. Field profiles live in `~/.meltwater/fields.json`.
+
 CSVs start with a UTF-8 byte-order mark so Excel shows non-English text correctly. For scripts that read plain UTF-8 (pandas, `csv`), add `--pandas`.
 
 Need exact per-day quotas? Use the search API: `mwpull pull --via search --mode per-day --per-day 100 ...`. It returns at most 100 documents per call (1,000 per query), so large pulls spend most of a day's call budget.
