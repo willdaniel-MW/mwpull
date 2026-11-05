@@ -40,7 +40,12 @@ _KNOWN = set(API_PATHS) | {"id", "document_id", "published_date", "date", "url",
 
 
 def get(d, *path):
-    for p in path:
+    """Walk a dotted path. A path may run through a list of objects (matched.inputs.name): the values found in
+    each item are joined with '; '."""
+    for i, p in enumerate(path):
+        if isinstance(d, list):
+            vals = [v for v in (get(x, *path[i:]) for x in d) if v not in (None, "")]
+            return "; ".join(str(v) for v in vals) if vals else None
         if not isinstance(d, dict):
             return None
         d = d.get(p)
