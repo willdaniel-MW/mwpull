@@ -115,7 +115,7 @@ def convert_run(run_dir, spec, fmt, pandas=False, output=None, log=print):
     finally:
         w.close()
     log(f"{rows} docs, {len(fields)} columns from {len(raws)} raw file(s)")
-    report(path, fmt)
+    report(path, fmt, fields=fields)
     return path
 
 
@@ -217,5 +217,5 @@ def run_export(client, a, sleep=time.sleep, log=print):
         w.close()
     log(f"\nDone. {sum(p['rows'] for p in plan)} docs. Data: {path}")
     if not a["no_report"]:
-        report(path, a["format"], want or None)
+        report(path, a["format"], want or None, a.get("fields"))
     return path

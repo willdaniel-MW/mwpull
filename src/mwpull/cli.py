@@ -8,7 +8,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from . import __version__, config, fieldprofiles, profiles, update
+from . import __version__, config, fieldprofiles, filters, profiles, update
 from .limits import LIMIT_KEYS, LimitReached, UsageGuard, fmt_when, parse_headers
 from .client import Client, MwError
 from .output import COLUMNS, PRESETS, PRESET_HELP, flatten, parse_fields, report
@@ -67,6 +67,17 @@ def add_boolean(p):
                         "single quotes, or leave the value off and mwpull asks you to paste it "
                         "(see `mwpull search create`)")
     p.add_argument("--search-name", help="name for the new search (default: mwpull <timestamp>)")
+    add_filters(p)
+
+
+def add_filters(p):
+    p.add_argument("--language", metavar="CODE",
+                   help="with --boolean: only this language, ANDed onto the boolean as language:\"en\". 2- or 3-letter "
+                        "code; several with commas (en,fr). Default: all languages")
+    p.add_argument("--source", metavar="TYPE",
+                   help="with --boolean: only this source type, ANDed onto the boolean (e.g. news -> "
+                        "infoType:\"news\"; twitter,reddit -> socialType:(\"twitter\" OR \"reddit\")). "
+                        f"Default: all sources. Choices: {filters.SOURCE_HELP}")
 
 
 ASK = "\0ask"  # --boolean given with no value: prompt for it
@@ -86,6 +97,9 @@ def ask_boolean(boolean):
 def ensure_search(a):
     """--boolean: save the query as a new search and carry on with its ID."""
     if not a.boolean:
+        if a.language or a.source:
+            raise MwError("--language/--source are added to a boolean, so they need --boolean. An existing "
+                          "search's filters can't be changed from here; edit it in Meltwater or create a new search.")
         return
     if a.search_id:
         raise MwError("Use either --search-id or --boolean, not both")
@@ -94,10 +108,20 @@ def ensure_search(a):
     if a.dry_run:
         a.search_id = "new-search"
         print("Dry run: the search would be saved as a new search when you run for real.")
+        print(f"  boolean: {filters.apply_filters(ask_boolean(a.boolean), a.language, a.source)}")
     else:
         prof = profiles.resolve(a.profile)
-        a.search_id = create_search(prof, a.search_name, ask_boolean(a.boolean))
-    a.boolean = None
+        a.search_id = create_search(prof, a.search_name, final_boolean(a.boolean, a))
+    a.boolean = a.language = a.source = None  # applied; cmd_pull -> cmd_export must not apply them twice
+
+
+def final_boolean(boolean, a):
+    """Ask for the boolean if needed, then add any --language/--source filters and show the result."""
+    b = ask_boolean(boolean)
+    full = filters.apply_filters(b, a.language, a.source)
+    if full != b:
+        print(f"Boolean with filters applied:\n  {full}")
+    return full
 
 
 def create_search(prof, name, boolean, case_sensitivity="no"):
@@ -114,7 +138,7 @@ def cmd_search(a):
         boolean = ASK
         if a.name is None and sys.stdin.isatty():
             a.name = input("Search name (Enter for an automatic name): ").strip() or None
-    print(create_search(prof, a.name, ask_boolean(boolean), a.case_sensitivity))
+    print(create_search(prof, a.name, final_boolean(boolean, a), a.case_sensitivity))
 
 
 def add_pull_args(p):
@@ -701,6 +725,7 @@ def parser():
     p.add_argument("--boolean", help="the boolean query, in single quotes. Leave it off and mwpull asks you to "
                                     "paste it (no quoting needed)")
     p.add_argument("--case-sensitivity", choices=("no", "yes", "hybrid"), default="no")
+    add_filters(p)
     p.set_defaults(fn=cmd_search)
 
     p = sub.add_parser("resume", help="continue an interrupted run from its folder (reads its manifest)")

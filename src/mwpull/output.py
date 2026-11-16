@@ -186,28 +186,47 @@ def read_rows(path, fmt):
                     yield json.loads(line)
 
 
-def report(path, fmt, target=None):
+# Where each QA-report column comes from in the raw API document, so the report still works when a field
+# profile renames columns (e.g. "Document ID=id").
+REPORT_PATHS = {"document_id": "id", "full_text": "content.body", "language": "enrichments.language_code",
+                "published_date": "published_date", "source_type": "source.type", "content_type": "content_type",
+                "source_name": "source.name", "domain": "source.domain"}
+
+
+def report_columns(cols, fields):
+    """Map report keys to the actual column names in the file (None if the file has no such column)."""
+    renamed = {}
+    for name, path in parse_fields(fields) if fields else []:
+        renamed[".".join(path) if path else name] = name
+    return {k: k if k in cols else renamed.get(v) if renamed.get(v) in cols else None
+            for k, v in REPORT_PATHS.items()}
+
+
+def report(path, fmt, target=None, fields=None):
     rows = list(read_rows(path, fmt))
     n = len(rows)
     tgt = f" (target {target})" if target else ""
     print(f"\n===== QA report: {path} =====")
-    print(f"rows: {n}{tgt}; unique ids: {len({r.get('document_id') for r in rows})}")
+    c = report_columns(set(rows[0]) if rows else set(), fields)
+    ids = f"; unique ids: {len({r.get(c['document_id']) for r in rows})}" if c["document_id"] else ""
+    print(f"rows: {n}{tgt}{ids}")
     if not n:
         return
-    cols = set(rows[0])
-    if "full_text" in cols:
-        print(f"empty full_text: {sum(not r['full_text'] for r in rows) / n:.1%}")
-    if "language" in cols:
-        print("languages:", dict(Counter(r["language"] for r in rows).most_common(5)))
-    if "published_date" in cols:
-        months = Counter((r["published_date"] or "")[:7] for r in rows)
-        days = Counter((r["published_date"] or "")[:10] for r in rows)
+    if c["full_text"]:
+        print(f"empty full_text: {sum(not r[c['full_text']] for r in rows) / n:.1%}")
+    if c["language"]:
+        print("languages:", dict(Counter(r[c["language"]] for r in rows).most_common(5)))
+    if c["published_date"]:
+        pd = c["published_date"]
+        months = Counter((r[pd] or "")[:7] for r in rows)
+        days = Counter((r[pd] or "")[:10] for r in rows)
         print("docs per month:", dict(sorted(months.items())))
         print(f"docs per day: min={min(days.values())} max={max(days.values())} days={len(days)}")
-    for col in ("source_type", "content_type", "source_name", "domain"):
-        if col not in cols:
+    for key in ("source_type", "content_type", "source_name", "domain"):
+        col = c[key]
+        if not col:
             continue
-        top = Counter(r[col] or "(blank)" for r in rows).most_common(20 if col in ("source_name", "domain") else 10)
-        print(f"\ntop {col}:")
+        top = Counter(r[col] or "(blank)" for r in rows).most_common(20 if key in ("source_name", "domain") else 10)
+        print(f"\ntop {key}:")
         for k, v in top:
             print(f"  {v / n:6.1%}  {v:6d}  {k}")

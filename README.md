@@ -38,6 +38,17 @@ mwpull search create        # simplest: asks for the name, then the boolean (pas
 
 On the command line, wrap the boolean in **single** quotes (it can contain double quotes); `--boolean` with no value, as in `mwpull pull --boolean --months 3 ...`, asks you to paste it.
 
+**Language and source filters** can't be toggled through the API, so they are added to the boolean itself. Use `--language` and `--source` with `--boolean` (or `search create`) and mwpull ANDs the right operators on and prints the final boolean:
+
+```bash
+mwpull pull --boolean '"acme"' --language en --source news ...
+#  -> "acme" AND language:"en" AND infoType:"news"
+--language en,fr                 # language:("en" OR "fr"); any 2- or 3-letter code
+--source twitter,reddit          # socialType:("twitter" OR "reddit")
+```
+
+Sources: `news`, `social`, `broadcast`, `twitter`, `facebook`, `instagram`, `reddit`, `youtube`, `tiktok`, `wechat`, `sina_weibo`, `line`, `linevoom`, `kakaotalk`, `red`, `social_comments`, `social_reviews`, `social_message_boards`, `social_blogs`, `podcasts`, `radio` (broadcastType "au"), `tv` (broadcastType "vi"), or the raw form `'infoType:"news"'`. Several sources are OR-ed only if they share one operator; mixing operators (e.g. news + twitter) is refused. Leave both flags off for all languages and sources. They need `--boolean`: an existing saved search can't be changed from here. The rules live in `src/mwpull/filters.py`.
+
 mwpull prints the new search's ID so you can reuse it. Search names must be unique in your account, and the new search appears in Meltwater like any other.
 
 Set where output goes once (override per run with `--out-dir`):

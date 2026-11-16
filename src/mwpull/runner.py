@@ -217,4 +217,4 @@ def run(client, a, log=print, confirm=ask_confirm):
 def finish(path, a):
     if path and not a["no_report"]:
         want = None if a["mode"] == "all" else a.get("max_docs")
-        report(path, a["format"], want)
+        report(path, a["format"], want, a.get("fields"))
