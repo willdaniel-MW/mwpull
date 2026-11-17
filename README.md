@@ -43,7 +43,7 @@ On the command line, wrap the boolean in **single** quotes (it can contain doubl
 ```bash
 mwpull pull --boolean '"acme"' --language en --source news ...
 #  -> "acme" AND language:"en" AND infoType:"news"
---language en,fr                 # language:("en" OR "fr"); any 2- or 3-letter code
+--language en,fr                 # language:("en" OR "fr"); any 2- or 3-letter code, or zh-Hans / zh-Hant
 --source twitter,reddit          # socialType:("twitter" OR "reddit")
 ```
 

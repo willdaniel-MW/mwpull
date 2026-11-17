@@ -72,7 +72,7 @@ def add_boolean(p):
 
 def add_filters(p):
     p.add_argument("--language", metavar="CODE",
-                   help="with --boolean: only this language, ANDed onto the boolean as language:\"en\". 2- or 3-letter "
+                   help="with --boolean: only this language, ANDed onto the boolean as language:\"en\". 2- or 3-letter (or zh-Hans/zh-Hant) "
                         "code; several with commas (en,fr). Default: all languages")
     p.add_argument("--source", metavar="TYPE",
                    help="with --boolean: only this source type, ANDed onto the boolean (e.g. news -> "

@@ -47,7 +47,7 @@ SOURCES = {
 }
 OPERATORS = ("infoType", "socialType", "broadcastType")
 RAW = re.compile(r'^(infoType|socialType|broadcastType)\s*:\s*"?([A-Za-z_]+)"?$')
-LANG = re.compile(r"^[a-z]{2,3}$")
+LANG = re.compile(r"^[a-z]{2,3}(-[a-z]{4})?$", re.I)  # en, fil, or script-tagged zh-Hans / zh-Hant
 ANY = ("", "any", "all")
 
 SOURCE_HELP = ("news, social, broadcast, twitter, facebook, instagram, reddit, youtube, tiktok, wechat, "
@@ -67,11 +67,17 @@ def _group(op, values):
     return f'{op}:(' + " OR ".join(f'"{v}"' for v in vals) + ")"
 
 
+def _norm_lang(code):
+    """'EN' -> 'en'; 'zh-hans' -> 'zh-Hans' (Meltwater's script subtag is Title-case)."""
+    lang, sep, script = code.partition("-")
+    return lang.lower() + (sep + script.title() if sep else "")
+
+
 def language_clause(spec):
     """'en' -> language:"en"; 'en,fr' -> language:("en" OR "fr"); None/'any' -> None."""
     if spec is None or spec.strip().lower() in ANY:
         return None
-    codes = [c.lower() for c in _split(spec)]
+    codes = [_norm_lang(c) for c in _split(spec)]
     bad = [c for c in codes if not LANG.match(c)]
     if bad or not codes:
         raise MwError(f"Language must be a 2- or 3-letter code such as en, fr, de, zh, fil (got: {spec!r}). "
